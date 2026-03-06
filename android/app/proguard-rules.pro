@@ -8,3 +8,8 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+
+# React Native + Hermes protection
+-keep class com.facebook.hermes.** { *; }
+-keep class com.facebook.react.** { *; }
+-dontwarn com.facebook.hermes.**

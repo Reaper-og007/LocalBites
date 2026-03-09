@@ -8,6 +8,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Linking, ActivityIndicator } 
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { supabase } from './lib/supabase';
+import { ThemeProvider } from './src/context/ThemeContext'; // Adjust path as needed
 
 // Screens
 import Welcome from './src/Welcome';
@@ -85,6 +86,7 @@ const App = () => {
 
   // 3. Main Navigation
   return (
+    <ThemeProvider>
     <NavigationContainer>
       <Stack.Navigator initialRouteName="Welcome" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
@@ -95,6 +97,7 @@ const App = () => {
         <Stack.Screen name="Contact" component={Contact} />
       </Stack.Navigator>
     </NavigationContainer>
+    </ThemeProvider>
   );
 };
 

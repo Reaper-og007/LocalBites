@@ -7,7 +7,7 @@ import { supabase } from './lib/supabase';
 import { ThemeContext } from './context/ThemeContext';
 
 const { width } = Dimensions.get('window');
-const CURRENT_VERSION_CODE = 2; // Updated for your new release
+const CURRENT_VERSION_CODE = 3; // Updated for your new release
 
 const Home = ({ navigation }) => {
   const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);

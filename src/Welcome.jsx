@@ -22,6 +22,7 @@ const Welcome = ({ navigation }) => {
           <TouchableOpacity 
             style={[styles.button, { backgroundColor: theme.accent }]} 
             activeOpacity={0.8}
+            // --- NEW: Change 'Home' to 'Login' ---
             onPress={() => navigation.navigate('Home')}
           >
             <Icon name="arrowright" size={45} color={theme.accentText} />

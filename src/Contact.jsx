@@ -1,14 +1,16 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StatusBar, Modal, Linking, SafeAreaView } from 'react-native';
 import AntDesign from 'react-native-vector-icons/AntDesign';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ThemeContext } from './context/ThemeContext';
+import { supabase } from './lib/supabase'; 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DeviceInfo from 'react-native-device-info';
 
 const Contact = ({ navigation, route }) => {
   const { theme } = useContext(ThemeContext);
-// Replace line 10 with this:
-const { cartData, billTotal, chefNotes, restaurantName, platformCommission } = route.params || {};
-  // Restored State
+  const { cartData, billTotal, chefNotes, restaurantName, platformCommission } = route.params || {};
+  
   const [userName, setUserName] = useState('');
   const [userPhone, setUserPhone] = useState('');
   const [userAddress, setUserAddress] = useState('');
@@ -16,18 +18,56 @@ const { cartData, billTotal, chefNotes, restaurantName, platformCommission } = r
   const [deliveryZone, setDeliveryZone] = useState('town');
   const [isSaving, setIsSaving] = useState(false);
 
+  const [pricing, setPricing] = useState({ town: 19, village: 69, slashed: 49 });
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
+  const [isVerifyingCoupon, setIsVerifyingCoupon] = useState(false);
+
   const businessNumber = "918390838652";
   
-  // Dynamic Delivery Fee Logic Restored
-  const deliveryFee = deliveryZone === 'town' ? 19 : 69;
-  const grandTotal = (billTotal || 0) + deliveryFee;
+  const deliveryFee = deliveryZone === 'town' ? pricing.town : pricing.village;
+  const initialTotal = (billTotal || 0) + deliveryFee;
+  const discountAmount = appliedCoupon ? (appliedCoupon.discount_type === 'percentage' ? (billTotal * (appliedCoupon.discount_value / 100)) : appliedCoupon.discount_value) : 0;
+  const grandTotal = Math.max(0, initialTotal - discountAmount);
 
-  // Alert State
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertConfig, setAlertConfig] = useState({ title: '', message: '', buttons: [] });
   const showAlert = (title, message, buttons = [{ text: 'OK', onPress: () => setAlertVisible(false) }]) => {
     setAlertConfig({ title, message, buttons });
     setAlertVisible(true);
+  };
+
+  useEffect(() => {
+    const initScreen = async () => {
+      try {
+        const savedProfileJson = await AsyncStorage.getItem('localbites_profile');
+        if (savedProfileJson) {
+          const profileData = JSON.parse(savedProfileJson);
+          if (profileData.userName) setUserName(profileData.userName);
+          if (profileData.userPhone) setUserPhone(profileData.userPhone);
+          if (profileData.userAddress) setUserAddress(profileData.userAddress);
+          if (profileData.userLandmark) setUserLandmark(profileData.userLandmark);
+          if (profileData.deliveryZone) setDeliveryZone(profileData.deliveryZone);
+        }
+      } catch (err) { console.log("Profile load failed:", err); }
+
+      try {
+        const { data } = await supabase.from('delivery_config').select('*').single();
+        if (data) setPricing({ town: data.delivery_fee_town, village: data.delivery_fee_village, slashed: data.delivery_fee_slashed });
+      } catch (err) { console.log("Pricing load failed:", err); }
+    };
+    initScreen();
+  }, []);
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim()) return;
+    setIsVerifyingCoupon(true);
+    const { data, error } = await supabase.from('coupons').select('*').eq('code', couponInput.toUpperCase().trim()).eq('is_active', true).single();
+    setIsVerifyingCoupon(false);
+    if (error || !data) return showAlert("Invalid Coupon", "Code does not exist or has expired.");
+    if (billTotal < data.min_order_amount) return showAlert("Min Order Required", `Needs ₹${data.min_order_amount} minimum.`);
+    setAppliedCoupon(data);
+    showAlert("Success! 🎉", "Coupon applied!");
   };
 
   const handlePhoneChange = (text) => { 
@@ -36,87 +76,83 @@ const { cartData, billTotal, chefNotes, restaurantName, platformCommission } = r
   };
 
   const validateAndConfirm = () => {
-    if (!cartData || cartData.length === 0) return showAlert("Error", "No items to order!");
-    
-    if (!userName.trim() || !userAddress.trim() || !userPhone.trim()) {
-        return showAlert("Missing Details", "Please fill in Name, Address, and Phone Number.");
-    }
-
-    if (userPhone.length !== 10) {
-        return showAlert("Invalid Phone", "Please enter a valid 10-digit mobile number.");
-    }
-
-    const firstDigit = userPhone.charAt(0);
-    if (['6','7','8','9'].indexOf(firstDigit) === -1) {
-        return showAlert("Invalid Phone", "Please enter a valid mobile number starting with 6, 7, 8, or 9.");
-    }
-
-    // Confirmation Modal before triggering webhook
-    showAlert(
-      "Confirm Order",
-      `Total Amount: ₹${grandTotal.toFixed(2)}\nPlace this order?`,
-      [
-        { text: "Cancel", onPress: () => setAlertVisible(false) },
-        { text: "Yes", onPress: sendToAutomation }
-      ]
-    );
+    if (!cartData || cartData.length === 0) return showAlert("Error", "No items!");
+    if (!userName.trim() || !userAddress.trim() || !userPhone.trim()) return showAlert("Missing Details", "Please fill all fields.");
+    if (userPhone.length !== 10) return showAlert("Invalid Phone", "Enter 10 digits.");
+    showAlert("Confirm Order", `Total: ₹${grandTotal.toFixed(2)}\nPlace this order?`, [
+      { text: "Cancel", onPress: () => setAlertVisible(false) },
+      { text: "Yes", onPress: sendToAutomation }
+    ]);
   };
 
-const sendToAutomation = () => {
+  const sendToAutomation = async () => {
     setAlertVisible(false); 
     setIsSaving(true);
+    
+    let deviceId = 'unknown_device';
+    try {
+        // Some versions of the library require await, others don't. 
+        // We use a safe check here.
+        if (typeof DeviceInfo.getUniqueId === 'function') {
+            deviceId = await DeviceInfo.getUniqueId();
+        } else {
+            deviceId = userPhone; // Fallback to phone if function is undefined
+        }
+    } catch(e) {
+        console.log("Device Info Error:", e);
+        deviceId = userPhone; 
+    }
     
     let orderString = cartData.map((item, index) => 
       `${index + 1}. ${item.itemName} (Size: ${item.size} | Extras: ${item.addons}) - ₹${item.price}`
     ).join('\n');
 
-    // The Ultimate Business Payload
+    // CHANGE: Fire and forget profile save
+    const profileToSave = { userName, userPhone, userAddress, userLandmark, deliveryZone };
+    AsyncStorage.setItem('localbites_profile', JSON.stringify(profileToSave)).catch(err => console.log(err));
+
     const orderPayload = { 
+        userId: deviceId, 
         userName, 
         userPhone, 
         userAddress: userLandmark.trim() ? `${userAddress} (Landmark: ${userLandmark})` : userAddress, 
         deliveryZone: deliveryZone === 'town' ? 'Chopda Town' : 'Nearby Village', 
-        restaurantName: restaurantName, // SEPARATED
+        restaurantName: restaurantName, 
         orderList: orderString, 
         chefNotes: chefNotes !== 'None' ? chefNotes : 'None',
-        itemsTotal: billTotal,          // SEPARATED (Customer Food Bill)
-        deliveryFee: deliveryFee,       // SEPARATED (Driver Payout)
-        grandTotal: grandTotal,         // SEPARATED (Total Collected)
-        commission: platformCommission, // SEPARATED (Your Profit)
-        timestamp: new Date().toISOString()
+        itemsTotal: Math.round(billTotal / 1.2),
+        deliveryFee: deliveryFee,       
+        couponCode: appliedCoupon?.code || 'NONE',
+        discountAmount: discountAmount,             
+        grandTotal: grandTotal,         
+        commission: platformCommission
     };
 
-    // Make sure you use /webhook-test/ first to teach n8n the new fields!
-    fetch('https://n8n-eodb.onrender.com/webhook/order-received', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(orderPayload) 
-    })
-    // ... keep your existing .then() and .catch() blocks below this ...
+ supabase.from('orders').insert({
+      user_id: deviceId, 
+      restaurant_name: restaurantName || 'LocalBites Partner', 
+      order_summary: orderString,
+      grand_total: grandTotal,
+      status: 'Pending'
+    }).then(({error}) => { if(error) console.log("DB Error:", error); });
 
-    .then(() => { 
+    supabase.functions.invoke('process-order', { body: { orderPayload } })
+      .then(({error}) => { if(error) console.log("Function Error:", error); });
+
+    // CHANGE: Instant UI confirmation
+    setTimeout(() => {
         setIsSaving(false); 
-        showAlert("Order Placed! 🎉", "We have received your order. We will contact you shortly to confirm.", [
+        showAlert("Order Placed! 🎉", "Received! We will contact you shortly.", [
             { text: "Awesome", onPress: () => { navigation.reset({ index: 0, routes: [{ name: 'Home' }] }); } }
         ]); 
-    })
-    .catch(err => { 
-        setIsSaving(false); 
-        console.log("n8n Error:", err); 
-        showAlert("Network Error", "Could not place order automatically. Please use WhatsApp."); 
-    });
+    }, 600); 
   };
-
-  const openWhatsAppSupport = () => { 
-    const message = `Hi! I need help with my order.`; 
-    Linking.openURL(`whatsapp://send?phone=${businessNumber}&text=${encodeURIComponent(message)}`); 
-  };
+  
+  const openWhatsAppSupport = () => { Linking.openURL(`whatsapp://send?phone=${businessNumber}&text=Help!`); };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
       <StatusBar translucent backgroundColor="transparent" barStyle="dark-content" />
-
-      {/* Alert Modal */}
       <Modal visible={alertVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
             <View style={[styles.modalContainer, { backgroundColor: theme.card }]}>
@@ -132,50 +168,40 @@ const sendToAutomation = () => {
             </View>
         </View>
       </Modal>
-
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <AntDesign name="arrowleft" size={28} color={theme.text} />
-        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}><AntDesign name="arrowleft" size={28} color={theme.text} /></TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Delivery Details</Text>
       </View>
-
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-
-        {/* Form Inputs */}
         <View style={styles.inputSection}>
           <Text style={[styles.inputLabel, { color: theme.text }]}>Full Name</Text>
           <TextInput style={[styles.inputField, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="Your Name" placeholderTextColor={theme.subText} value={userName} onChangeText={setUserName} />
-
           <Text style={[styles.inputLabel, { color: theme.text }]}>Phone Number</Text>
           <TextInput style={[styles.inputField, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="e.g. 8390838652" placeholderTextColor={theme.subText} keyboardType="numeric" maxLength={10} value={userPhone} onChangeText={handlePhoneChange} />
-
           <Text style={[styles.inputLabel, { color: theme.text }]}>Complete Address</Text>
-          <TextInput style={[styles.inputField, styles.textArea, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="House No, Street, Landmark..." placeholderTextColor={theme.subText} multiline numberOfLines={3} value={userAddress} onChangeText={setUserAddress} />
-
+          <TextInput style={[styles.inputField, styles.textArea, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="House No, Street..." placeholderTextColor={theme.subText} multiline value={userAddress} onChangeText={setUserAddress} />
           <Text style={[styles.inputLabel, { color: theme.text }]}>Nearby Landmark</Text>
           <TextInput style={[styles.inputField, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="e.g. Near Water Tank" placeholderTextColor={theme.subText} value={userLandmark} onChangeText={setUserLandmark} />
         </View>
-
-        {/* RESTORED: Delivery Zone Selector */}
-        <Text style={[styles.subTitle, { color: theme.subText }]}>Select Delivery Zone:</Text>
+        <View style={[styles.couponContainer, { borderColor: theme.border, backgroundColor: theme.card }]}>
+          <TextInput style={[styles.couponInput, { color: theme.text }]} placeholder="Coupon Code" placeholderTextColor={theme.subText} autoCapitalize="characters" value={couponInput} onChangeText={setCouponInput} />
+          <TouchableOpacity style={[styles.couponBtn, { backgroundColor: theme.accent }]} onPress={handleApplyCoupon} disabled={isVerifyingCoupon}>
+            {isVerifyingCoupon ? <ActivityIndicator size="small" color="#FFF"/> : <Text style={styles.couponBtnText}>APPLY</Text>}
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity onPress={() => setDeliveryZone('town')} style={[styles.radioOption, { backgroundColor: theme.card, borderColor: deliveryZone === 'town' ? theme.accent : theme.border }]}>
-          <View style={[styles.radioCircle, { borderColor: deliveryZone === 'town' ? theme.accent : theme.subText }]}>
-            {deliveryZone === 'town' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}
-          </View>
-          <Text style={[styles.radioText, { color: theme.text }]}>Chopda (₹19)</Text>
+          <View style={[styles.radioCircle, { borderColor: deliveryZone === 'town' ? theme.accent : theme.subText }]}>{deliveryZone === 'town' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}</View>
+          <Text style={[styles.radioText, { color: theme.text }]}>Chopda (₹{pricing.town})</Text>
         </TouchableOpacity>
-
         <TouchableOpacity onPress={() => setDeliveryZone('village')} style={[styles.radioOption, { backgroundColor: theme.card, borderColor: deliveryZone === 'village' ? theme.accent : theme.border }]}>
-          <View style={[styles.radioCircle, { borderColor: deliveryZone === 'village' ? theme.accent : theme.subText }]}>
-            {deliveryZone === 'village' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}
-          </View>
-          <Text style={[styles.radioText, { color: theme.text }]}>Nearby Village/Town (₹69)</Text>
+          <View style={[styles.radioCircle, { borderColor: deliveryZone === 'village' ? theme.accent : theme.subText }]}>{deliveryZone === 'village' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}</View>
+          <Text style={[styles.radioText, { color: theme.text }]}>Nearby Village (₹{pricing.village})</Text>
         </TouchableOpacity>
-
-         {/* NEW Order Summary Box */}
+        
+        {/* CHANGE: Restored the detailed Order Summary block */}
         <View style={[styles.summaryBox, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.summaryTitle, { color: theme.text }]}>Order Summary</Text>
+          
           {cartData?.map((item, index) => (
             <View key={index} style={styles.summaryItemRow}>
               <View style={{flex: 1}}>
@@ -186,6 +212,20 @@ const sendToAutomation = () => {
               <Text style={[styles.summaryItemPrice, { color: theme.text }]}>₹{item.price}</Text>
             </View>
           ))}
+          
+          <View style={[styles.divider, { backgroundColor: theme.border }]} />
+          
+          <View style={styles.summaryItemRow}>
+            <Text style={[styles.summaryItemName, { color: theme.text }]}>Delivery Fee</Text>
+            <Text style={[styles.summaryItemPrice, { color: theme.text }]}>₹{deliveryFee}</Text>
+          </View>
+
+          {appliedCoupon && (
+            <View style={styles.summaryItemRow}>
+              <Text style={[styles.summaryItemName, { color: theme.accent }]}>Discount ({appliedCoupon.code})</Text>
+              <Text style={[styles.summaryItemPrice, { color: theme.accent }]}>-₹{discountAmount.toFixed(2)}</Text>
+            </View>
+          )}
           
           {chefNotes !== 'None' && (
              <View style={[styles.notesBox, { backgroundColor: theme.bg }]}>
@@ -201,7 +241,7 @@ const sendToAutomation = () => {
           </View>
         </View>
 
-        {/* RESTORED: Cancellation Policy */}
+        {/* CHANGE: Restored Cancellation Policy */}
         <View style={styles.policyContainer}>
           <Text style={styles.policyTitle}>Cancellation Policy:</Text>
           <Text style={styles.policyText}>
@@ -210,23 +250,15 @@ const sendToAutomation = () => {
           </Text>
         </View>
 
-        {/* RESTORED: WhatsApp Fallback */}
         <Text style={[styles.subTitleCenter, { color: theme.subText }]}>OR</Text>
         <TouchableOpacity style={styles.whatsappButton} onPress={openWhatsAppSupport}>
-          <MaterialCommunityIcons name="whatsapp" size={24} color="#FFF" style={styles.btnIcon} />
-          <Text style={styles.whatsappText}>Contact Us / Order via WhatsApp</Text>
+            <MaterialCommunityIcons name="whatsapp" size={24} color="#FFF" style={styles.btnIcon} />
+            <Text style={styles.whatsappText}>Contact Us / Order via WhatsApp</Text>
         </TouchableOpacity>
-
       </ScrollView>
-
-      {/* NEW Themed Submit Button Footer */}
       <View style={[styles.footerContainer, { backgroundColor: theme.card }]}>
         <TouchableOpacity style={[styles.submitButton, { backgroundColor: isSaving ? theme.border : theme.accent }]} onPress={validateAndConfirm} disabled={isSaving}>
-          {isSaving ? (
-            <ActivityIndicator color={theme.text} />
-          ) : (
-            <Text style={[styles.submitBtnText, { color: theme.accentText }]}>Place Order • ₹{grandTotal.toFixed(2)}</Text>
-          )}
+          {isSaving ? <ActivityIndicator color={theme.text} /> : <Text style={[styles.submitBtnText, { color: theme.accentText }]}>Place Order • ₹{grandTotal.toFixed(2)}</Text>}
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -240,56 +272,53 @@ const styles = StyleSheet.create({
   headerTitle: { fontFamily: 'montserrat_bold', fontSize: 24 },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
   
-  // Summary Styles
-  summaryBox: { borderWidth: 1, borderRadius: 16, padding: 20, marginBottom: 25 },
+  // CHANGE: Restored detailed Summary styles
+  summaryBox: { borderWidth: 1, borderRadius: 16, padding: 20, marginBottom: 25, marginTop: 10 },
   summaryTitle: { fontFamily: 'montserrat_bold', fontSize: 18, marginBottom: 15 },
   summaryItemRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  summaryItemName: { fontFamily: 'montserrat_medium', fontSize: 16 },
+  summaryItemName: { fontFamily: 'montserrat_medium', fontSize: 15 },
   summaryItemDesc: { fontFamily: 'montserrat_regular', fontSize: 12, marginTop: 2 },
-  summaryItemPrice: { fontFamily: 'montserrat_bold', fontSize: 16 },
-  notesBox: { padding: 10, borderRadius: 8, marginTop: 10 },
-  notesTitle: { fontFamily: 'montserrat_bold', fontSize: 12 },
-  notesText: { fontFamily: 'montserrat_regular', fontSize: 12, marginTop: 4 },
+  summaryItemPrice: { fontFamily: 'montserrat_bold', fontSize: 15 },
   divider: { height: 1, marginVertical: 15 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalText: { fontFamily: 'montserrat_bold', fontSize: 18 },
   totalAmount: { fontFamily: 'montserrat_bold', fontSize: 22 },
+  
+  notesBox: { padding: 10, borderRadius: 8, marginTop: 10 },
+  notesTitle: { fontFamily: 'montserrat_bold', fontSize: 12 },
+  notesText: { fontFamily: 'montserrat_regular', fontSize: 12, marginTop: 4 },
+  
+  // CHANGE: Restored policy container styles
+  policyContainer: { marginBottom: 15, padding: 15, backgroundColor: '#FFF3E0', borderRadius: 12, borderWidth: 1, borderColor: '#FFCC80' }, 
+  policyTitle: { fontFamily: 'montserrat_bold', fontSize: 14, color: '#E65100', marginBottom: 5 }, 
+  policyText: { fontFamily: 'montserrat_regular', fontSize: 12, color: '#BF360C', lineHeight: 18 },
+  subTitleCenter: { fontFamily: 'montserrat_bold', fontSize: 14, textAlign: 'center', marginVertical: 15 }, 
 
-  // Input Styles
   inputSection: { marginBottom: 10 },
   inputLabel: { fontFamily: 'montserrat_medium', fontSize: 14, marginBottom: 8, marginLeft: 5 },
   inputField: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 15, height: 55, fontFamily: 'montserrat_regular', fontSize: 16, marginBottom: 20 },
   textArea: { height: 100, textAlignVertical: 'top', paddingTop: 15 },
-
-  // Radio Options
-  subTitle: { fontFamily: 'montserrat_medium', fontSize: 16, marginBottom: 10, marginTop: 5 },
   radioOption: { flexDirection: 'row', alignItems: 'center', padding: 15, borderWidth: 1, borderRadius: 12, marginBottom: 10 },
   radioCircle: { height: 20, width: 20, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
   innerCircle: { height: 10, width: 10, borderRadius: 5 },
   radioText: { fontFamily: 'montserrat_medium', fontSize: 16 },
-
-  // Policy & WhatsApp
-  policyContainer: { marginTop: 20, marginBottom: 15, padding: 15, backgroundColor: '#FFF3E0', borderRadius: 12, borderWidth: 1, borderColor: '#FFCC80' }, 
-  policyTitle: { fontFamily: 'montserrat_bold', fontSize: 14, color: '#E65100', marginBottom: 5 }, 
-  policyText: { fontFamily: 'montserrat_regular', fontSize: 12, color: '#BF360C', lineHeight: 18 },
-  subTitleCenter: { fontFamily: 'montserrat_bold', fontSize: 14, textAlign: 'center', marginVertical: 15 }, 
-  whatsappButton: { backgroundColor: '#25D366', height: 50, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', elevation: 2, marginBottom: 10 }, 
+  whatsappButton: { backgroundColor: '#25D366', height: 50, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }, 
   whatsappText: { fontFamily: 'montserrat_bold', fontSize: 16, color: '#FFF' }, 
   btnIcon: { marginRight: 10 },
-
-  // Footer
   footerContainer: { padding: 20, borderTopLeftRadius: 30, borderTopRightRadius: 30, elevation: 10 },
   submitButton: { height: 55, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
   submitBtnText: { fontFamily: 'montserrat_bold', fontSize: 18 },
-
-  // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }, 
   modalContainer: { width: '80%', borderRadius: 20, padding: 25, alignItems: 'center', elevation: 10 }, 
   modalTitle: { fontFamily: 'montserrat_bold', fontSize: 20, marginBottom: 10, textAlign: 'center' }, 
   modalMessage: { fontFamily: 'montserrat_regular', fontSize: 16, marginBottom: 25, textAlign: 'center' }, 
   modalButtonRow: { flexDirection: 'row', justifyContent: 'center', width: '100%' }, 
   modalButton: { paddingVertical: 12, paddingHorizontal: 30, borderRadius: 12, minWidth: 100, alignItems: 'center' },
-  modalButtonText: { fontFamily: 'montserrat_bold', fontSize: 16 }
+  modalButtonText: { fontFamily: 'montserrat_bold', fontSize: 16 },
+  couponContainer: { flexDirection: 'row', borderWidth: 1, borderRadius: 12, overflow: 'hidden', marginBottom: 20 },
+  couponInput: { flex: 1, paddingHorizontal: 15, fontFamily: 'montserrat_regular', fontSize: 16 },
+  couponBtn: { paddingHorizontal: 20, justifyContent: 'center', alignItems: 'center' },
+  couponBtnText: { fontFamily: 'montserrat_bold', fontSize: 14, color: '#FFF' }
 });
 
 export default Contact;

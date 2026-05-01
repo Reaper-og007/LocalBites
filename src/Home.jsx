@@ -56,7 +56,7 @@ const Home = ({ navigation }) => {
       if (error) throw error;
       setPopularItems(data || []);
     } catch (error) { 
-      console.log("Popular Items Error (You may need to adjust the table name):", error.message); 
+      console.log("Popular Items Error:", error.message); 
     } finally { 
       setLoading(false); 
     }
@@ -81,9 +81,14 @@ const Home = ({ navigation }) => {
     return currentMins >= openMins && currentMins <= closeMins;
   };
 
-  const topRestaurant = restaurants.find(r => r.is_featured === true) || restaurants[0]; 
-  const remainingRestaurants = restaurants.filter(r => r.id !== topRestaurant?.id); 
-  
+  const getMarkupPrice = (price, markup) => {
+    const rawPrice = parseFloat(price || 0);
+    let safeMarkup = (markup !== undefined && markup !== null) ? parseFloat(markup) : 30;
+    if (safeMarkup === 30 && rawPrice < 100) safeMarkup = 20;
+    const calculated = Math.ceil(rawPrice * (1 + (safeMarkup / 100)));
+    return isNaN(calculated) ? 0 : calculated;
+  };
+
   const categories = [
     { name: 'Burgers', icon: 'hamburger' }, 
     { name: 'Pizza', icon: 'pizza' }, 
@@ -122,6 +127,10 @@ const Home = ({ navigation }) => {
     );
   }
 
+  let topPicksArray = restaurants.filter(r => r.is_featured === true);
+  if (topPicksArray.length === 0 && restaurants.length > 0) topPicksArray = restaurants.slice(0, 3);
+  const nearbyRestaurants = restaurants.filter(r => !topPicksArray.some(topPick => topPick.id === r.id));
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
       <StatusBar translucent backgroundColor="transparent" barStyle={isDarkMode ? "light-content" : "dark-content"} />
@@ -129,12 +138,14 @@ const Home = ({ navigation }) => {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
         <View style={styles.header}>
-          <Text style={[styles.welcomeText, { color: theme.text }]}>WELCOME</Text>
+          <View>
+            <Text style={[styles.greetingSub, { color: theme.subText }]}>Hello!</Text>
+            <Text style={[styles.greetingMain, { color: theme.text }]}>What's on Menu? 🍽</Text>
+          </View>
           <View style={{ flexDirection: 'row', gap: 15, alignItems: 'center' }}>
             <TouchableOpacity onPress={toggleTheme} style={styles.iconButton}>
               <Feather name={isDarkMode ? "sun" : "moon"} size={24} color={theme.text} />
             </TouchableOpacity>
-            {/* CHANGE: Removed handleProfileClick auth check. Navigates straight to Profile screen. */}
             <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.iconButton}>
               <Feather name="user" size={24} color={theme.text} />
             </TouchableOpacity>
@@ -146,118 +157,126 @@ const Home = ({ navigation }) => {
           <TextInput placeholder="Search for food or restaurants" placeholderTextColor={theme.subText} style={[styles.searchInput, { color: theme.text }]} editable={false} pointerEvents="none" />
         </TouchableOpacity>
 
-        {/* --- SECTION 1: TOP RESTAURANT --- */}
-        {topRestaurant && (() => {
-          const isTopOpen = checkIsRestaurantOpen(topRestaurant);
-          return (
-            <View style={styles.heroSection}>
-              <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>Top restaurant this week</Text>
-              </View>
-              
-              <TouchableOpacity style={[styles.heroCard, { backgroundColor: theme.card }]} onPress={() => navigation.navigate('Details', { restaurant: topRestaurant })}>
-                <View style={styles.heroImageContainer}>
-                  <Image source={{ uri: topRestaurant.image_url }} style={styles.heroImage} />
-                  {!isTopOpen && <View style={styles.closedOverlay}><Text style={styles.closedText}>CLOSED</Text></View>}
-                  
-                  <View style={[styles.badgeContainer, { backgroundColor: theme.accent }]}>
-                    <Text style={styles.badgeText}>Explore</Text>
-                  </View>
-                </View>
-                
-                <View style={styles.heroContent}>
-                  <Text style={[styles.heroTitle, { color: theme.text }]}>{topRestaurant.name}</Text>
-                  <Text style={[styles.heroSubtitle, { color: theme.subText }]} numberOfLines={1}>{topRestaurant.location}</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-          );
-        })()}
-
-        {/* --- SECTION 2: CATEGORIES --- */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Shop By Categories</Text>
-        </View>
-        
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll} contentContainerStyle={{ paddingRight: 20 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={{ paddingRight: 20 }}>
+          <View style={[styles.catChip, { backgroundColor: theme.text, borderColor: theme.text }]}>
+            <Text style={[styles.catChipText, { color: theme.bg }]}>All</Text>
+          </View>
           {categories.map((item, index) => (
-            <TouchableOpacity key={index} style={styles.categoryItem} onPress={() => navigation.navigate('Search', { categoryQuery: item.name })}>
-              <View style={[styles.categoryCircle, { backgroundColor: theme.card, borderColor: theme.border }]}>
-                <MaterialCommunityIcons name={item.icon} size={28} color={theme.accent} />
-              </View>
-              <Text style={[styles.categoryText, { color: theme.text }]} numberOfLines={1}>{item.name}</Text>
+            <TouchableOpacity key={index} style={[styles.catChip, { backgroundColor: theme.card, borderColor: theme.border }]} onPress={() => navigation.navigate('Search', { categoryQuery: item.name })}>
+              <Text style={[styles.catChipText, { color: theme.text }]} numberOfLines={1}>{item.name}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
-        {/* --- SECTION 3: MORE LOCAL BRANDS --- */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>More Restaurants</Text>
-        </View>
-        
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll} contentContainerStyle={{ paddingRight: 20 }}>
-          {remainingRestaurants.map((rest) => {
-            const isRestOpen = checkIsRestaurantOpen(rest);
-            const dietColor = rest.is_veg ? '#0f8a46' : '#e23744'; 
-
-            return (
-              <TouchableOpacity key={rest.id} style={[styles.modernCard, { backgroundColor: theme.card }]} onPress={() => navigation.navigate('Details', { restaurant: rest })}>
-                <View style={styles.modernCardImageContainer}>
-                  <Image source={{ uri: rest.image_url }} style={styles.modernCardImage} />
-                  {!isRestOpen && <View style={styles.closedOverlaySmall}><Text style={styles.closedTextSmall}>CLOSED</Text></View>}
-                </View>
-                
-                <View style={styles.modernCardContent}>
-                  <Text style={[styles.modernCardTitle, { color: theme.text }]} numberOfLines={2}>
-                    {rest.name}
-                  </Text>
-                  
-                  <View style={styles.subtitleRow}>
-                    <View style={[styles.vegIconBorder, { borderColor: dietColor }]}>
-                      <View style={[styles.vegIconDot, { backgroundColor: dietColor, borderRadius: rest.is_veg ? 4 : 50 }]} />
+        {topPicksArray.length > 0 && (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Top picks this week</Text>
+            </View>
+            
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll} contentContainerStyle={{ paddingRight: 20 }}>
+              {topPicksArray.map((rest, index) => {
+                const isRestOpen = checkIsRestaurantOpen(rest);
+                return (
+                  <TouchableOpacity key={`top-${rest.id || index}`} style={[styles.featCard, { backgroundColor: theme.card }]} onPress={() => navigation.navigate('Details', { restaurant: rest })}>
+                    <View style={styles.featImageContainer}>
+                      <Image source={{ uri: rest.image_url }} style={styles.featImage} />
+                      {!isRestOpen ? (
+                        <View style={styles.closedPillTop}><Text style={styles.closedPillTextTop}>CLOSED</Text></View>
+                      ) : (
+                        <View style={styles.topPickBadge}><Text style={styles.topPickBadgeText}>⭐ Top Pick</Text></View>
+                      )}
                     </View>
-                    <Text style={[styles.modernCardSubtitle, { color: theme.subText }]} numberOfLines={1}>
-                      {'  '}•{'  '}{rest.location || 'Local'}
+                    
+                    <View style={styles.featContent}>
+                      <Text style={[styles.featTitle, { color: theme.text }]} numberOfLines={2}>{rest.name}</Text>
+                      <View style={styles.featMeta}>
+                        <Text style={[styles.featSubtitle, { color: theme.subText }]} numberOfLines={1}>{rest.location || 'Local'}</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Restaurants near you</Text>
+          </View>
+          
+          <View style={styles.verticalListContainer}>
+            {nearbyRestaurants.map((rest) => {
+              const isRestOpen = checkIsRestaurantOpen(rest);
+              return (
+                <TouchableOpacity key={`list-${rest.id}`} style={[styles.listRow, { backgroundColor: theme.card }]} onPress={() => navigation.navigate('Details', { restaurant: rest })}>
+                  <Image source={{ uri: rest.image_url }} style={styles.listThumb} />
+                  
+                  <View style={styles.listInfo}>
+                    <Text style={[styles.listName, { color: theme.text }]} numberOfLines={2}>{rest.name}</Text>
+                    <Text style={[styles.listSub, { color: theme.subText }]} numberOfLines={1}>
+                      {rest.is_veg ? 'Pure Veg' : 'Non-Veg'} • {rest.location || 'Local'}
                     </Text>
                   </View>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+                  
+                  <View style={styles.listRight}>
+                    {isRestOpen ? (
+                      <View style={styles.badgeOpen}><Text style={styles.badgeOpenText}>OPEN</Text></View>
+                    ) : (
+                      <View style={styles.badgeClosed}><Text style={styles.badgeClosedText}>Opens {rest.open_time ? rest.open_time.substring(0, 5) : 'soon'}</Text></View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
-        {/* --- SECTION 4: MOST POPULAR ITEMS --- */}
         {popularItems.length > 0 && (
-          <View style={styles.popularSection}>
+          <View style={styles.sectionContainer}>
             <View style={styles.sectionHeader}>
               <Text style={[styles.sectionTitle, { color: theme.text }]}>Most Popular Items</Text>
             </View>
             
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll} contentContainerStyle={{ paddingRight: 20 }}>
-              {popularItems.map((item) => (
-                <TouchableOpacity 
-                  key={item.id} 
-                  style={[styles.popularCard, { backgroundColor: theme.card }]} 
-                  onPress={() => navigation.navigate('Details', { restaurant: item.restaurants, autoSelectItem: item })}
-                >
-                  <View style={styles.popularImageContainer}>
-                    <Image source={{ uri: item.image_url || 'https://via.placeholder.com/150' }} style={styles.popularImage} />
-                    <View style={[styles.addButton, { backgroundColor: theme.accent }]}>
-                      <AntDesign name="plus" size={14} color="#FFF" />
+              {popularItems.map((item) => {
+                const finalPrice = getMarkupPrice(item.price, item.markup_percentage);
+                let slashedDisplay = null;
+                if (item.slashed_price && parseFloat(item.slashed_price) > finalPrice) {
+                  slashedDisplay = parseFloat(item.slashed_price);
+                }
+
+                return (
+                  <TouchableOpacity 
+                    key={item.id} 
+                    style={[styles.popularCard, { backgroundColor: theme.card }]} 
+                    onPress={() => navigation.navigate('Details', { restaurant: item.restaurants, autoSelectItem: item })}
+                  >
+                    <View style={styles.popularImageContainer}>
+                      <Image source={{ uri: item.image_url || 'https://via.placeholder.com/150' }} style={styles.popularImage} />
+                      <View style={[styles.addButton, { backgroundColor: theme.accent }]}>
+                        <AntDesign name="plus" size={14} color="#FFF" />
+                      </View>
                     </View>
-                  </View>
-                  
-                  <View style={styles.popularContent}>
-                    <View>
-                      <Text style={[styles.popularTitle, { color: theme.text }]} numberOfLines={2}>{item.name}</Text>
-                      <Text style={[styles.popularPrice, { color: theme.text }]}>₹{Math.round(item.price * 1.2)}</Text>
+                    
+                    <View style={styles.popularContent}>
+                      <View>
+                        <Text style={[styles.popularTitle, { color: theme.text }]} numberOfLines={2}>{item.name}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={[styles.popularPrice, { color: theme.text }]}>₹{finalPrice}</Text>
+                          {slashedDisplay && (
+                            <Text style={[styles.slashedPriceText, { color: theme.subText, fontSize: 11, marginLeft: 4 }]}>₹{slashedDisplay}</Text>
+                          )}
+                        </View>
+                      </View>
+                      <Text style={[styles.popularRestaurant, { color: theme.subText }]} numberOfLines={2}>
+                        {item.restaurants?.name || 'Local Restaurant'}
+                      </Text>
                     </View>
-                    <Text style={[styles.popularRestaurant, { color: theme.subText }]} numberOfLines={2}>
-                      {item.restaurants?.name || 'Local Restaurant'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         )}
@@ -270,103 +289,53 @@ const Home = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: Platform.OS === 'android' ? 40 : 0 },
   scrollContent: { paddingBottom: 40 },
-  
   header: { paddingHorizontal: 20, marginTop: 10, marginBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  welcomeText: { fontFamily: 'montserrat_bold', fontSize: 32, letterSpacing: 0.5 },
+  greetingSub: { fontFamily: 'montserrat_regular', fontSize: 13, marginBottom: 2 },
+  greetingMain: { fontFamily: 'montserrat_bold', fontSize: 20, letterSpacing: -0.4 },
   iconButton: { padding: 5 },
-  
-  searchContainer: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginBottom: 25, borderRadius: 25, borderWidth: 1, paddingHorizontal: 15, height: 50, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 3 },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginBottom: 15, borderRadius: 14, borderWidth: 0.5, paddingHorizontal: 15, height: 45 },
   searchIcon: { marginRight: 10 },
-  searchInput: { flex: 1, fontFamily: 'montserrat_regular', fontSize: 14 },
-  
-  sectionHeader: { paddingHorizontal: 20, marginBottom: 15, marginTop: 10 },
-  sectionTitle: { fontFamily: 'montserrat_bold', fontSize: 18 },
-  
-  heroSection: { marginBottom: 25 },
-  heroCard: { marginHorizontal: 20, borderRadius: 24, overflow: 'hidden', elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6 },
-  heroImageContainer: { height: 180, width: '100%', position: 'relative' },
-  heroImage: { width: '100%', height: '100%', resizeMode: 'cover' },
-  badgeContainer: { position: 'absolute', top: 15, left: 15, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
-  badgeText: { color: '#FFF', fontFamily: 'montserrat_bold', fontSize: 12 },
-  heroContent: { padding: 18 },
-  heroTitle: { fontFamily: 'montserrat_bold', fontSize: 20, marginBottom: 4 },
-  heroSubtitle: { fontFamily: 'montserrat_regular', fontSize: 13 },
-  
-  horizontalScroll: { paddingLeft: 20, marginBottom: 30 },
-  
-  categoryItem: { alignItems: 'center', marginRight: 25, width: 65 },
-  categoryCircle: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', borderWidth: 1, elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, marginBottom: 8 },
-  categoryText: { fontFamily: 'montserrat_medium', fontSize: 12, textAlign: 'center' },
-
-  modernCard: { 
-    width: width * 0.45, 
-    height: 200, 
-    marginRight: 15, 
-    borderRadius: 20, 
-    overflow: 'hidden', 
-    elevation: 3, 
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 2 }, 
-    shadowOpacity: 0.1, 
-    shadowRadius: 4, 
-    marginBottom: 10 
-  },
-  modernCardImageContainer: { width: '100%', height: 110, position: 'relative' },
-  modernCardImage: { width: '100%', height: '100%', resizeMode: 'cover' },
-  
-  modernCardContent: { 
-    padding: 12,
-    flex: 1, 
-    justifyContent: 'space-between' 
-  },
-  modernCardTitle: { 
-    fontFamily: 'montserrat_bold', 
-    fontSize: 14, 
-    lineHeight: 18, 
-    marginBottom: 4, 
-  },  
-  subtitleRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center',
-  },
-  vegIconBorder: { width: 12, height: 12, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center', borderRadius: 2 },
-  vegIconDot: { width: 6, height: 6 },
-  modernCardSubtitle: { fontFamily: 'montserrat_regular', fontSize: 11, flex: 1 },
-
-  popularSection: { marginBottom: 10 },
-  
-  popularCard: { 
-    width: 140, 
-    height: 220, 
-    marginRight: 15, 
-    borderRadius: 16, 
-    padding: 10, 
-    elevation: 2, 
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 2 }, 
-    shadowOpacity: 0.05, 
-    shadowRadius: 3, 
-    marginBottom: 5 
-  },
+  searchInput: { flex: 1, fontFamily: 'montserrat_regular', fontSize: 13 },
+  chipScroll: { paddingLeft: 20, marginBottom: 20 },
+  catChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 0.5, marginRight: 8, justifyContent: 'center', alignItems: 'center' },
+  catChipText: { fontFamily: 'montserrat_medium', fontSize: 12 },
+  sectionContainer: { marginBottom: 20 },
+  sectionHeader: { paddingHorizontal: 20, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle: { fontFamily: 'montserrat_bold', fontSize: 16, letterSpacing: -0.2 },
+  horizontalScroll: { paddingLeft: 20 },
+  featCard: { width: 220, marginRight: 12, borderRadius: 16, overflow: 'hidden' },
+  featImageContainer: { height: 110, width: '100%', position: 'relative' },
+  featImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  topPickBadge: { position: 'absolute', top: 8, left: 8, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  topPickBadgeText: { color: '#FFF', fontFamily: 'montserrat_bold', fontSize: 10 },
+  closedPillTop: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(229, 29, 29, 0.6)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  closedPillTextTop: { color: '#FFF', fontFamily: 'montserrat_bold', fontSize: 10, letterSpacing: 0.5 },
+  featContent: { padding: 12 },
+  // UI CHANGE: Added a fixed height of 36 to force 2 lines of space always, perfectly aligning the Zorko card with others.
+  featTitle: { fontFamily: 'montserrat_bold', fontSize: 14, marginBottom: 4, height: 36 },
+  featMeta: { flexDirection: 'row', alignItems: 'center' },
+  featSubtitle: { fontFamily: 'montserrat_regular', fontSize: 11 },
+  verticalListContainer: { paddingHorizontal: 20 },
+  listRow: { flexDirection: 'row', padding: 12, borderRadius: 14, marginBottom: 10, alignItems: 'center' },
+  listThumb: { width: 56, height: 56, borderRadius: 12, marginRight: 12, backgroundColor: '#e8e4d8' },
+  listInfo: { flex: 1, justifyContent: 'center' },
+  listName: { fontFamily: 'montserrat_bold', fontSize: 14, marginBottom: 4 },
+  listSub: { fontFamily: 'montserrat_regular', fontSize: 11 },
+  listRight: { alignItems: 'flex-end', justifyContent: 'center', marginLeft: 10 },
+  badgeOpen: { backgroundColor: '#eafad0', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  badgeOpenText: { color: '#3d7a00', fontFamily: 'montserrat_bold', fontSize: 9 },
+  badgeClosed: { backgroundColor: '#f5f0e8', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  badgeClosedText: { color: '#b08030', fontFamily: 'montserrat_bold', fontSize: 9 },
+  popularCard: { width: 140, height: 210, marginRight: 15, borderRadius: 16, padding: 10, marginBottom: 5 },
   popularImageContainer: { width: '100%', height: 100, borderRadius: 12, overflow: 'hidden', position: 'relative', marginBottom: 10 },
   popularImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   addButton: { position: 'absolute', bottom: 5, right: 5, width: 26, height: 26, borderRadius: 13, justifyContent: 'center', alignItems: 'center', elevation: 3 },
-  
-  popularContent: { 
-    paddingHorizontal: 2,
-    flex: 1,
-    justifyContent: 'space-between'
-  },
+  popularContent: { paddingHorizontal: 2, flex: 1, justifyContent: 'space-between' },
   popularTitle: { fontFamily: 'montserrat_bold', fontSize: 13, marginBottom: 3 },
   popularPrice: { fontFamily: 'montserrat_bold', fontSize: 14, marginBottom: 4 },
-  popularRestaurant: { fontFamily: 'montserrat_regular', fontSize: 10},
-
-  closedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  closedText: { color: 'white', fontFamily: 'montserrat_bold', fontSize: 24, letterSpacing: 2 },
-  closedOverlaySmall: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
-  closedTextSmall: { color: 'white', fontFamily: 'montserrat_bold', fontSize: 14, letterSpacing: 1 },
-
-  skeletonBlock: { borderRadius: 8 }
+  slashedPriceText: { fontFamily: 'montserrat_regular', fontSize: 13, textDecorationLine: 'line-through' },
+  popularRestaurant: { fontFamily: 'montserrat_regular', fontSize: 10 },
+  skeletonBlock: { borderRadius: 12 }
 });
 
 export default Home;

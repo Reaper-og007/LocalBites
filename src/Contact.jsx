@@ -9,7 +9,14 @@ import DeviceInfo from 'react-native-device-info';
 
 const Contact = ({ navigation, route }) => {
   const { theme } = useContext(ThemeContext);
-  const { cartData, billTotal, chefNotes, restaurantName, platformCommission } = route.params || {};
+  
+  // UI CHANGE: Force billTotal to Number immediately to prevent string math
+  const params = route.params || {};
+  const cartData = params.cartData || [];
+  const billTotal = Number(params.billTotal || 0);
+  const chefNotes = params.chefNotes || "None";
+  const restaurantName = params.restaurantName || "LocalBites";
+  const platformCommission = Number(params.platformCommission || 0);
   
   const [userName, setUserName] = useState('');
   const [userPhone, setUserPhone] = useState('');
@@ -25,10 +32,22 @@ const Contact = ({ navigation, route }) => {
 
   const businessNumber = "918390838652";
   
-  const deliveryFee = deliveryZone === 'town' ? pricing.town : pricing.village;
-  const initialTotal = (billTotal || 0) + deliveryFee;
-  const discountAmount = appliedCoupon ? (appliedCoupon.discount_type === 'percentage' ? (billTotal * (appliedCoupon.discount_value / 100)) : appliedCoupon.discount_value) : 0;
-  const grandTotal = Math.max(0, initialTotal - discountAmount);
+  // CHANGE: Calculate Automatic Discounts
+  let autoDiscountPercentage = 0;
+  if (billTotal >= 400) autoDiscountPercentage = 0.10; 
+  else if (billTotal >= 200) autoDiscountPercentage = 0.05; 
+
+  const autoDiscountAmount = billTotal * autoDiscountPercentage;
+
+  // CHANGE: Calculate Free Delivery logic
+  const isFreeDelivery = billTotal >= 500 && deliveryZone === 'town';
+  const finalDeliveryFee = isFreeDelivery ? 0 : (deliveryZone === 'town' ? Number(pricing.town) : Number(pricing.village));
+
+  const initialTotal = billTotal + finalDeliveryFee;
+  const couponDiscountAmount = appliedCoupon ? (appliedCoupon.discount_type === 'percentage' ? (billTotal * (appliedCoupon.discount_value / 100)) : Number(appliedCoupon.discount_value)) : 0;
+  
+  const totalDiscountAmount = autoDiscountAmount + couponDiscountAmount;
+  const grandTotal = Math.max(0, initialTotal - totalDiscountAmount);
 
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertConfig, setAlertConfig] = useState({ title: '', message: '', buttons: [] });
@@ -79,67 +98,72 @@ const Contact = ({ navigation, route }) => {
     if (!cartData || cartData.length === 0) return showAlert("Error", "No items!");
     if (!userName.trim() || !userAddress.trim() || !userPhone.trim()) return showAlert("Missing Details", "Please fill all fields.");
     if (userPhone.length !== 10) return showAlert("Invalid Phone", "Enter 10 digits.");
-    showAlert("Confirm Order", `Total: ₹${grandTotal.toFixed(2)}\nPlace this order?`, [
+    showAlert("Confirm Order", `Total: ₹${grandTotal.toFixed(0)}\nPlace this order?`, [
       { text: "Cancel", onPress: () => setAlertVisible(false) },
       { text: "Yes", onPress: sendToAutomation }
     ]);
   };
 
-  const sendToAutomation = async () => {
+ const sendToAutomation = async () => {
     setAlertVisible(false); 
     setIsSaving(true);
     
     let deviceId = 'unknown_device';
     try {
-        // Some versions of the library require await, others don't. 
-        // We use a safe check here.
         if (typeof DeviceInfo.getUniqueId === 'function') {
             deviceId = await DeviceInfo.getUniqueId();
         } else {
-            deviceId = userPhone; // Fallback to phone if function is undefined
+            deviceId = userPhone;
         }
-    } catch(e) {
-        console.log("Device Info Error:", e);
-        deviceId = userPhone; 
-    }
+    } catch(e) { deviceId = userPhone; }
     
     let orderString = cartData.map((item, index) => 
       `${index + 1}. ${item.itemName} (Size: ${item.size} | Extras: ${item.addons}) - ₹${item.price}`
     ).join('\n');
 
-    // CHANGE: Fire and forget profile save
     const profileToSave = { userName, userPhone, userAddress, userLandmark, deliveryZone };
     AsyncStorage.setItem('localbites_profile', JSON.stringify(profileToSave)).catch(err => console.log(err));
+    
+    // CHANGE: Fetch the FCM Token stored during app launch
+    let fcmToken = 'NONE';
+    try {
+      const storedToken = await AsyncStorage.getItem('fcm_token');
+      if (storedToken) fcmToken = storedToken;
+    } catch (err) {
+      console.log("FCM Token retrieval error:", err);
+    }
+
+    const safeBillTotal = Math.round(Number(billTotal) || 0);
+    const safeDelivery = Math.round(Number(finalDeliveryFee) || 0);
+    const safeDiscount = Math.round(Number(totalDiscountAmount) || 0);
+    const safeGrandTotal = Math.round(Number(grandTotal) || 0);
+    const safeCommission = Math.round(Number(platformCommission) || 0);
 
     const orderPayload = { 
-        userId: deviceId, 
-        userName, 
-        userPhone, 
-        userAddress: userLandmark.trim() ? `${userAddress} (Landmark: ${userLandmark})` : userAddress, 
-        deliveryZone: deliveryZone === 'town' ? 'Chopda Town' : 'Nearby Village', 
-        restaurantName: restaurantName, 
-        orderList: orderString, 
-        chefNotes: chefNotes !== 'None' ? chefNotes : 'None',
-        itemsTotal: Math.round(billTotal / 1.2),
-        deliveryFee: deliveryFee,       
-        couponCode: appliedCoupon?.code || 'NONE',
-        discountAmount: discountAmount,             
-        grandTotal: grandTotal,         
-        commission: platformCommission
+        userId: String(deviceId), 
+        userName: String(userName), 
+        userPhone: String(userPhone), 
+        userAddress: String(userLandmark.trim() ? `${userAddress} (Landmark: ${userLandmark})` : userAddress), 
+        deliveryZone: String(deliveryZone === 'town' ? 'Chopda Town' : 'Nearby Village'), 
+        restaurantName: String(restaurantName), 
+        orderList: String(orderString), 
+        chefNotes: String(chefNotes),
+        itemsTotal: safeBillTotal,
+        deliveryFee: safeDelivery,      
+        couponCode: String(appliedCoupon?.code || (safeDiscount > 0 ? 'AUTO DISCOUNT' : 'NONE')),
+        discountAmount: safeDiscount,            
+        grandTotal: safeGrandTotal,        
+        commission: safeCommission,
+        // CHANGE: Successfully passing the token to the backend
+        fcmToken: String(fcmToken) 
     };
 
- supabase.from('orders').insert({
-      user_id: deviceId, 
-      restaurant_name: restaurantName || 'LocalBites Partner', 
-      order_summary: orderString,
-      grand_total: grandTotal,
-      status: 'Pending'
-    }).then(({error}) => { if(error) console.log("DB Error:", error); });
-
     supabase.functions.invoke('process-order', { body: { orderPayload } })
-      .then(({error}) => { if(error) console.log("Function Error:", error); });
+      .then(({data, error}) => { 
+        if(error) console.log("Edge Function Call Error:", error); 
+        else console.log("Edge Function Response:", data);
+      });
 
-    // CHANGE: Instant UI confirmation
     setTimeout(() => {
         setIsSaving(false); 
         showAlert("Order Placed! 🎉", "Received! We will contact you shortly.", [
@@ -184,21 +208,21 @@ const Contact = ({ navigation, route }) => {
           <TextInput style={[styles.inputField, { backgroundColor: theme.card, color: theme.text, borderColor: theme.border }]} placeholder="e.g. Near Water Tank" placeholderTextColor={theme.subText} value={userLandmark} onChangeText={setUserLandmark} />
         </View>
         <View style={[styles.couponContainer, { borderColor: theme.border, backgroundColor: theme.card }]}>
-          <TextInput style={[styles.couponInput, { color: theme.text }]} placeholder="Coupon Code" placeholderTextColor={theme.subText} autoCapitalize="characters" value={couponInput} onChangeText={setCouponInput} />
+          <TextInput style={[styles.couponInput, { color: theme.text }]} placeholder="Got a manual Coupon?" placeholderTextColor={theme.subText} autoCapitalize="characters" value={couponInput} onChangeText={setCouponInput} />
           <TouchableOpacity style={[styles.couponBtn, { backgroundColor: theme.accent }]} onPress={handleApplyCoupon} disabled={isVerifyingCoupon}>
             {isVerifyingCoupon ? <ActivityIndicator size="small" color="#FFF"/> : <Text style={styles.couponBtnText}>APPLY</Text>}
           </TouchableOpacity>
         </View>
+        
         <TouchableOpacity onPress={() => setDeliveryZone('town')} style={[styles.radioOption, { backgroundColor: theme.card, borderColor: deliveryZone === 'town' ? theme.accent : theme.border }]}>
           <View style={[styles.radioCircle, { borderColor: deliveryZone === 'town' ? theme.accent : theme.subText }]}>{deliveryZone === 'town' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}</View>
-          <Text style={[styles.radioText, { color: theme.text }]}>Chopda (₹{pricing.town})</Text>
+          <Text style={[styles.radioText, { color: theme.text }]}>Chopda {isFreeDelivery ? '(FREE)' : `(₹${pricing.town})`}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setDeliveryZone('village')} style={[styles.radioOption, { backgroundColor: theme.card, borderColor: deliveryZone === 'village' ? theme.accent : theme.border }]}>
           <View style={[styles.radioCircle, { borderColor: deliveryZone === 'village' ? theme.accent : theme.subText }]}>{deliveryZone === 'village' && <View style={[styles.innerCircle, { backgroundColor: theme.accent }]} />}</View>
           <Text style={[styles.radioText, { color: theme.text }]}>Nearby Village (₹{pricing.village})</Text>
         </TouchableOpacity>
         
-        {/* CHANGE: Restored the detailed Order Summary block */}
         <View style={[styles.summaryBox, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.summaryTitle, { color: theme.text }]}>Order Summary</Text>
           
@@ -217,13 +241,23 @@ const Contact = ({ navigation, route }) => {
           
           <View style={styles.summaryItemRow}>
             <Text style={[styles.summaryItemName, { color: theme.text }]}>Delivery Fee</Text>
-            <Text style={[styles.summaryItemPrice, { color: theme.text }]}>₹{deliveryFee}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {isFreeDelivery && <Text style={{ textDecorationLine: 'line-through', color: theme.subText, marginRight: 6, fontSize: 13 }}>₹{pricing.town}</Text>}
+              <Text style={[styles.summaryItemPrice, { color: isFreeDelivery ? theme.accent : theme.text }]}>{isFreeDelivery ? 'FREE' : `₹${finalDeliveryFee}`}</Text>
+            </View>
           </View>
+
+          {autoDiscountAmount > 0 && (
+            <View style={styles.summaryItemRow}>
+              <Text style={[styles.summaryItemName, { color: theme.accent }]}>Auto-Savings ({autoDiscountPercentage * 100}% OFF)</Text>
+              <Text style={[styles.summaryItemPrice, { color: theme.accent }]}>-₹{autoDiscountAmount.toFixed(2)}</Text>
+            </View>
+          )}
 
           {appliedCoupon && (
             <View style={styles.summaryItemRow}>
-              <Text style={[styles.summaryItemName, { color: theme.accent }]}>Discount ({appliedCoupon.code})</Text>
-              <Text style={[styles.summaryItemPrice, { color: theme.accent }]}>-₹{discountAmount.toFixed(2)}</Text>
+              <Text style={[styles.summaryItemName, { color: theme.accent }]}>Coupon ({appliedCoupon.code})</Text>
+              <Text style={[styles.summaryItemPrice, { color: theme.accent }]}>-₹{couponDiscountAmount.toFixed(2)}</Text>
             </View>
           )}
           
@@ -241,7 +275,6 @@ const Contact = ({ navigation, route }) => {
           </View>
         </View>
 
-        {/* CHANGE: Restored Cancellation Policy */}
         <View style={styles.policyContainer}>
           <Text style={styles.policyTitle}>Cancellation Policy:</Text>
           <Text style={styles.policyText}>
@@ -258,7 +291,7 @@ const Contact = ({ navigation, route }) => {
       </ScrollView>
       <View style={[styles.footerContainer, { backgroundColor: theme.card }]}>
         <TouchableOpacity style={[styles.submitButton, { backgroundColor: isSaving ? theme.border : theme.accent }]} onPress={validateAndConfirm} disabled={isSaving}>
-          {isSaving ? <ActivityIndicator color={theme.text} /> : <Text style={[styles.submitBtnText, { color: theme.accentText }]}>Place Order • ₹{grandTotal.toFixed(2)}</Text>}
+          {isSaving ? <ActivityIndicator color={theme.text} /> : <Text style={[styles.submitBtnText, { color: theme.accentText }]}>Place Order • ₹{grandTotal.toFixed(0)}</Text>}
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -271,8 +304,6 @@ const styles = StyleSheet.create({
   backButton: { marginRight: 15 },
   headerTitle: { fontFamily: 'montserrat_bold', fontSize: 24 },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
-  
-  // CHANGE: Restored detailed Summary styles
   summaryBox: { borderWidth: 1, borderRadius: 16, padding: 20, marginBottom: 25, marginTop: 10 },
   summaryTitle: { fontFamily: 'montserrat_bold', fontSize: 18, marginBottom: 15 },
   summaryItemRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
@@ -283,17 +314,13 @@ const styles = StyleSheet.create({
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalText: { fontFamily: 'montserrat_bold', fontSize: 18 },
   totalAmount: { fontFamily: 'montserrat_bold', fontSize: 22 },
-  
   notesBox: { padding: 10, borderRadius: 8, marginTop: 10 },
   notesTitle: { fontFamily: 'montserrat_bold', fontSize: 12 },
   notesText: { fontFamily: 'montserrat_regular', fontSize: 12, marginTop: 4 },
-  
-  // CHANGE: Restored policy container styles
   policyContainer: { marginBottom: 15, padding: 15, backgroundColor: '#FFF3E0', borderRadius: 12, borderWidth: 1, borderColor: '#FFCC80' }, 
   policyTitle: { fontFamily: 'montserrat_bold', fontSize: 14, color: '#E65100', marginBottom: 5 }, 
   policyText: { fontFamily: 'montserrat_regular', fontSize: 12, color: '#BF360C', lineHeight: 18 },
   subTitleCenter: { fontFamily: 'montserrat_bold', fontSize: 14, textAlign: 'center', marginVertical: 15 }, 
-
   inputSection: { marginBottom: 10 },
   inputLabel: { fontFamily: 'montserrat_medium', fontSize: 14, marginBottom: 8, marginLeft: 5 },
   inputField: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 15, height: 55, fontFamily: 'montserrat_regular', fontSize: 16, marginBottom: 20 },

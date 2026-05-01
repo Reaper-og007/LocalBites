@@ -23,7 +23,21 @@ const Checkout = ({ navigation, route }) => {
   // Custom Size Modal State
   const [sizeModalConfig, setSizeModalConfig] = useState({ visible: false, instanceId: null, sizes: [] });
 
-  const getMarkupPrice = (price) => Math.ceil(parseFloat(price || 0) * 1.20);
+  // CHANGE: Dynamic Markup Function. Uses item's specific markup_percentage, defaults to 30% if undefined.
+  // UI CHANGE: Added strict fallback (30) so the math never results in NaN
+// LOGIC CHANGE: Match the Smart Markup Engine from Details.jsx
+  const getMarkupPrice = (price, markup) => {
+    const rawPrice = parseFloat(price || 0);
+    let safeMarkup = (markup !== undefined && markup !== null) ? parseFloat(markup) : 30;
+
+    // Overriding the default 30% for cheap items
+    if (safeMarkup === 30 && rawPrice < 100) {
+      safeMarkup = 20;
+    }
+
+    const calculated = Math.ceil(rawPrice * (1 + (safeMarkup / 100)));
+    return isNaN(calculated) ? 0 : calculated;
+  };
 
   useEffect(() => { 
     if (items && items.length > 0) { 
@@ -57,7 +71,7 @@ const Checkout = ({ navigation, route }) => {
     setCartInstances(initialInstances);
   };
 
-const createInstance = (baseItem, optionsDb) => {
+  const createInstance = (baseItem, optionsDb) => {
     let priceNum = typeof baseItem.price === 'number' ? baseItem.price : parseFloat(baseItem.price.toString().replace(/[^0-9.]/g, ''));
     const itemOptions = optionsDb.filter(o => o.item_id === baseItem.id);
     const sizes = itemOptions.filter(o => o.option_type === 'SIZE');
@@ -65,8 +79,8 @@ const createInstance = (baseItem, optionsDb) => {
     const defaultSize = sizes.find(s => s.name.toLowerCase() === 'regular') || sizes[0] || null;
 
     return {
-      ...baseItem, // SPREAD FIRST
-      instanceId: `${baseItem.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`, // GENERATE NEW ID LAST SO IT OVERWRITES
+      ...baseItem, 
+      instanceId: `${baseItem.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`, 
       numericPrice: priceNum,
       selectedSize: defaultSize,
       selectedToppings: [] 
@@ -77,11 +91,11 @@ const createInstance = (baseItem, optionsDb) => {
     let total = 0; 
     cartInstances.forEach(inst => { 
       let baseCost = inst.selectedSize ? inst.selectedSize.price_modifier : inst.numericPrice;
-      let instanceTotal = getMarkupPrice(baseCost);
+      // CHANGE: Pass the instance's specific markup_percentage to the dynamic calculator
+      let instanceTotal = getMarkupPrice(baseCost, inst.markup_percentage);
       
       inst.selectedToppings.forEach(tId => {
         const toppingData = availableOptions.find(o => o.id === tId);
-        // NO MARKUP ON TOPPINGS
         if (toppingData) instanceTotal += toppingData.price_modifier;
       });
       total += instanceTotal; 
@@ -104,7 +118,7 @@ const createInstance = (baseItem, optionsDb) => {
     }));
   };
 
- const handleProceed = () => { 
+  const handleProceed = () => { 
     if (cartInstances.length === 0) return showAlert("Cart Empty", "Please add some items first!"); 
     
     let exactCommission = 0;
@@ -118,17 +132,17 @@ const createInstance = (baseItem, optionsDb) => {
       }).filter(Boolean).join(', ');
 
       let baseCost = inst.selectedSize ? inst.selectedSize.price_modifier : inst.numericPrice;
-      let finalPrice = getMarkupPrice(baseCost);
+      // CHANGE: Applied dynamic markup calculation for the proceed payload
+      let finalPrice = getMarkupPrice(baseCost, inst.markup_percentage);
       
-      // Calculate commission for the main item
       exactCommission += (finalPrice - baseCost);
       
       inst.selectedToppings.forEach(tId => {
         const tData = availableOptions.find(o => o.id === tId);
         if (tData) {
-            const toppingMarkup = getMarkupPrice(tData.price_modifier);
+            // CHANGE: Apply dynamic markup to toppings if needed, defaulting to 30%
+            const toppingMarkup = getMarkupPrice(tData.price_modifier, tData.markup_percentage || 30);
             finalPrice += toppingMarkup;
-            // Calculate commission for the toppings
             exactCommission += (toppingMarkup - tData.price_modifier);
         }
       });
@@ -145,13 +159,29 @@ const createInstance = (baseItem, optionsDb) => {
     }); 
   };
 
+  // CHANGE: Gamification Logic - Calculate progress towards the next discount tier
+  let nextTierMessage = '';
+  let progressPercentage = 0;
+  if (subtotal < 200) {
+    nextTierMessage = `Add ₹${(200 - subtotal).toFixed(0)} more for 5% OFF!`;
+    progressPercentage = (subtotal / 200) * 100;
+  } else if (subtotal < 400) {
+    nextTierMessage = `Add ₹${(400 - subtotal).toFixed(0)} more for 10% OFF!`;
+    progressPercentage = ((subtotal - 200) / 200) * 100;
+  } else if (subtotal < 500) {
+    nextTierMessage = `Add ₹${(500 - subtotal).toFixed(0)} more for FREE Delivery (Chopda)!`;
+    progressPercentage = ((subtotal - 400) / 100) * 100;
+  } else {
+    nextTierMessage = `🎉 You've unlocked maximum savings & Free Delivery!`;
+    progressPercentage = 100;
+  }
+
   if (loadingOptions) return <View style={[styles.container, {justifyContent: 'center', backgroundColor: theme.bg}]}><ActivityIndicator size="large" color={theme.accent}/></View>;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <StatusBar translucent backgroundColor="transparent" barStyle="dark-content" />
       
-      {/* Dynamic Size Selection Modal */}
       <Modal visible={sizeModalConfig.visible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { backgroundColor: theme.card, width: '85%' }]}>
@@ -166,7 +196,8 @@ const createInstance = (baseItem, optionsDb) => {
                 }}
               >
                 <Text style={[styles.sizeOptionText, { color: theme.text }]}>{s.name}</Text>
-                <Text style={[styles.sizeOptionPrice, { color: theme.text }]}>₹{getMarkupPrice(s.price_modifier)}</Text>
+                {/* CHANGE: Added dynamic markup to modal price display */}
+                <Text style={[styles.sizeOptionPrice, { color: theme.text }]}>₹{getMarkupPrice(s.price_modifier, s.markup_percentage)}</Text>
               </TouchableOpacity>
             ))}
             <TouchableOpacity style={{marginTop: 20, padding: 10}} onPress={() => setSizeModalConfig({ visible: false, instanceId: null, sizes: [] })}>
@@ -200,6 +231,17 @@ const createInstance = (baseItem, optionsDb) => {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        
+        {/* CHANGE: Progress Bar UI injected above the cart items */}
+        {cartInstances.length > 0 && (
+          <View style={[styles.progressContainer, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            <Text style={[styles.progressText, { color: theme.text }]}>{nextTierMessage}</Text>
+            <View style={[styles.progressBarBg, { backgroundColor: theme.border }]}>
+              <View style={[styles.progressBarFill, { width: `${progressPercentage}%`, backgroundColor: theme.accent }]} />
+            </View>
+          </View>
+        )}
+
         <View style={styles.listContainer}>
           {cartInstances.map((inst, index) => {
             const itemOptions = availableOptions.filter(o => o.item_id === inst.originalId || o.item_id === inst.id);
@@ -207,10 +249,10 @@ const createInstance = (baseItem, optionsDb) => {
             const toppings = itemOptions.filter(o => o.option_type === 'TOPPING');
 
             let baseCost = inst.selectedSize ? inst.selectedSize.price_modifier : inst.numericPrice;
-            let instTotal = getMarkupPrice(baseCost);
+            // CHANGE: Dynamic markup for individual cart card display
+            let instTotal = getMarkupPrice(baseCost, inst.markup_percentage);
             inst.selectedToppings.forEach(tId => {
               const tData = availableOptions.find(o => o.id === tId);
-              // NO MARKUP ON TOPPINGS
               if (tData) instTotal += tData.price_modifier;
             });
 
@@ -227,14 +269,14 @@ const createInstance = (baseItem, optionsDb) => {
                   </TouchableOpacity>
                 </View>
 
-                {/* Custom Themed Size Dropdown Button */}
                 {sizes.length > 0 && (
                   <TouchableOpacity 
                     style={[styles.customPickerBtn, { borderColor: theme.border, backgroundColor: theme.bg }]}
                     onPress={() => setSizeModalConfig({ visible: true, instanceId: inst.instanceId, sizes: sizes })}
                   >
                     <Text style={[styles.customPickerText, { color: theme.text }]}>
-                      {inst.selectedSize ? `${inst.selectedSize.name} (₹${getMarkupPrice(inst.selectedSize.price_modifier)})` : 'Select Size'}
+                      {/* CHANGE: Dynamic markup for picker text */}
+                      {inst.selectedSize ? `${inst.selectedSize.name} (₹${getMarkupPrice(inst.selectedSize.price_modifier, inst.selectedSize.markup_percentage)})` : 'Select Size'}
                     </Text>
                     <AntDesign name="down" size={16} color={theme.subText} />
                   </TouchableOpacity>
@@ -253,7 +295,6 @@ const createInstance = (baseItem, optionsDb) => {
                             onPress={() => toggleTopping(inst.instanceId, t)}
                           >
                             <Text style={[styles.toppingText, { color: isSelected ? theme.accentText : theme.text }]}>
-                              {/* NO MARKUP ON TOPPINGS */}
                               {t.name} (+₹{t.price_modifier})
                             </Text>
                           </TouchableOpacity>
@@ -306,6 +347,12 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 20 }, 
   backButton: { marginRight: 15 }, 
   headerTitle: { fontFamily: 'montserrat_bold', fontSize: 24 }, 
+
+  progressContainer: { marginHorizontal: 20, marginBottom: 20, padding: 15, borderRadius: 16, borderWidth: 1, elevation: 2 },
+  progressText: { fontFamily: 'montserrat_bold', fontSize: 13, marginBottom: 10, textAlign: 'center' },
+  progressBarBg: { height: 8, borderRadius: 4, width: '100%', overflow: 'hidden' },
+  progressBarFill: { height: '100%', borderRadius: 4 },
+
   listContainer: { paddingHorizontal: 20 }, 
   cartCard: { borderRadius: 20, padding: 15, marginBottom: 15, elevation: 3 }, 
   itemHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
@@ -315,7 +362,6 @@ const styles = StyleSheet.create({
   itemPrice: { fontFamily: 'montserrat_bold', fontSize: 16 }, 
   removeBtn: { padding: 5 },
   
-  // Custom Picker Styles
   customPickerBtn: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 15, height: 50, marginBottom: 15 },
   customPickerText: { fontFamily: 'montserrat_medium', fontSize: 14 },
   sizeOptionBtn: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingVertical: 15, borderBottomWidth: 1 },

@@ -23,13 +23,19 @@ const Search = ({ navigation, route }) => {
   const [activeCourseFilter, setActiveCourseFilter] = useState(null);
   const [activeVarietyFilter, setActiveVarietyFilter] = useState(null);
 
+  const [activeChip, setActiveChip] = useState('All');
+  const filterChips = ['All', 'Veg only', 'Under ₹100', 'Rating 4+', 'Starters', 'Main course'];
+
   const courseOptions = ['Starters', 'Main Course', 'Desserts', 'Beverages'];
   const varietyOptions = ['North Indian', 'South Indian', 'Chinese', 'Italian', 'Fast Food'];
 
-  const getMarkupPrice = (originalPrice) => { 
-    const price = parseFloat(originalPrice); 
-    if (isNaN(price)) return 0; 
-    return Math.ceil(price * 1.20); 
+  // LOGIC CHANGE: Synced the Smart Markup Engine to Search.jsx
+  const getMarkupPrice = (price, markup) => {
+    const rawPrice = parseFloat(price || 0);
+    let safeMarkup = (markup !== undefined && markup !== null) ? parseFloat(markup) : 30;
+    if (safeMarkup === 30 && rawPrice < 100) safeMarkup = 20;
+    const calculated = Math.ceil(rawPrice * (1 + (safeMarkup / 100)));
+    return isNaN(calculated) ? 0 : calculated;
   };
   
   useEffect(() => { 
@@ -41,28 +47,24 @@ const Search = ({ navigation, route }) => {
     } 
   }, [categoryQuery]);
 
-  // CHANGE: Optimized Data Loading Logic
   const loadInitialData = async () => {
-    // 1. Try to get cache first
     try {
       const cachedData = await AsyncStorage.getItem('localbites_search_cache');
       if (cachedData) {
         const parsed = JSON.parse(cachedData);
         if (parsed && parsed.length > 0) {
           setItems(parsed);
-          setLoading(false); // CHANGE: Kill loading instantly if cache exists
+          setLoading(false); 
         }
       }
     } catch (e) { console.log("Cache Error", e); }
 
-    // 2. Perform background fetch
     try {
       const { data, error } = await supabase.from('menu_items').select('*, restaurants(*)'); 
       if (error) throw error; 
       
       const activeItems = data ? data.filter(item => item.is_deleted !== true) : [];
       
-      // CHANGE: Only update state if the data actually changed to save CPU cycles
       if (JSON.stringify(activeItems) !== await AsyncStorage.getItem('localbites_search_cache')) {
           setItems(activeItems);
           AsyncStorage.setItem('localbites_search_cache', JSON.stringify(activeItems));
@@ -70,7 +72,7 @@ const Search = ({ navigation, route }) => {
     } catch (error) { 
       console.error(error.message); 
     } finally { 
-      setLoading(false); // Ensure loading is off even if fetch fails
+      setLoading(false); 
     } 
   };
 
@@ -94,7 +96,15 @@ const Search = ({ navigation, route }) => {
     const matchesVariety = !activeVarietyFilter || (item.variety && item.variety === activeVarietyFilter);
     const matchesVeg = vegFilter === 'All' || (vegFilter === 'Veg' ? item.is_veg === true : item.is_veg === false);
     
-    return matchesSearch && matchesCourse && matchesVariety && matchesVeg;
+    let matchesChip = true;
+    if (activeChip === 'Veg only') matchesChip = item.is_veg === true;
+    // LOGIC CHANGE: Uses the correct smart logic to filter items under 100
+    if (activeChip === 'Under ₹100') matchesChip = getMarkupPrice(item.price, item.markup_percentage) < 100;
+    if (activeChip === 'Rating 4+') matchesChip = (item.rating || (item.restaurants && item.restaurants.rating) || 0) >= 4;
+    if (activeChip === 'Starters') matchesChip = item.course === 'Starters';
+    if (activeChip === 'Main course') matchesChip = item.course === 'Main Course';
+    
+    return matchesSearch && matchesCourse && matchesVariety && matchesVeg && matchesChip;
   });
 
   const handleCoursePress = (filter) => setActiveCourseFilter(activeCourseFilter === filter ? null : filter);
@@ -105,10 +115,9 @@ const Search = ({ navigation, route }) => {
     setShowFilters(!showFilters);
   };
 
-  // CHANGE: Conditional rendering - Only show skeleton if we have NO items and are loading
   if (loading && items.length === 0) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
+      <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? theme.bg : '#F7F6F2' }]}>
         <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
         <View style={styles.topBar}>
           <View style={[styles.skeletonBlock, { width: 40, height: 40, backgroundColor: theme.border, borderRadius: 20 }]} />
@@ -117,11 +126,10 @@ const Search = ({ navigation, route }) => {
         </View>
         <View style={styles.searchWrapper}>
            <View style={[styles.skeletonBlock, styles.searchContainer, { backgroundColor: theme.card, borderColor: theme.border }]} />
-           <View style={[styles.skeletonBlock, styles.filterIconBtn, { backgroundColor: theme.border }]} />
         </View>
         <View style={styles.gridContainer}>
           {[1, 2, 3, 4, 5, 6].map((i) => (
-             <View key={i} style={[styles.skeletonBlock, styles.gridCard, { height: 200, backgroundColor: theme.card, borderColor: theme.border, borderWidth: 1 }]} />
+             <View key={i} style={[styles.skeletonBlock, styles.gridCard, { height: 200, backgroundColor: theme.card, borderColor: theme.border, borderWidth: 1, borderRadius: 16 }]} />
           ))}
         </View>
       </SafeAreaView>
@@ -129,22 +137,22 @@ const Search = ({ navigation, route }) => {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? theme.bg : '#F7F6F2' }]}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
       
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <AntDesign name="arrowleft" size={26} color={theme.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: theme.text }]}>Find Your Food</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Find your food</Text>
         <View style={{ width: 26 }} />
       </View>
 
       <View style={styles.searchWrapper}>
-        <View style={[styles.searchContainer, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <AntDesign name="search1" size={20} color={theme.subText} style={styles.searchIcon} />
+        <View style={[styles.searchContainer, { backgroundColor: isDarkMode ? theme.card : '#fff', borderColor: isDarkMode ? theme.border : '#e0ddd5' }]}>
+          <AntDesign name="search1" size={18} color={theme.subText} style={styles.searchIcon} />
           <TextInput 
-            placeholder="Search for dishes..." 
+            placeholder="Search dishes or restaurants..." 
             placeholderTextColor={theme.subText} 
             style={[styles.searchInput, { color: theme.text }]} 
             autoFocus={!categoryQuery} 
@@ -156,14 +164,30 @@ const Search = ({ navigation, route }) => {
               <AntDesign name="closecircle" size={16} color={theme.subText} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity 
+             style={styles.inlineFilterBtn} 
+             onPress={toggleFilterMenu}
+          >
+            <Feather name="sliders" size={14} color="#d4f570" />
+          </TouchableOpacity>
         </View>
-        
-        <TouchableOpacity 
-           style={[styles.filterIconBtn, { backgroundColor: showFilters ? theme.text : theme.accent }]} 
-           onPress={toggleFilterMenu}
-        >
-          <Feather name={showFilters ? "x" : "sliders"} size={20} color={showFilters ? theme.bg : "#FFF"} />
-        </TouchableOpacity>
+      </View>
+
+      <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll} contentContainerStyle={{ paddingRight: 20 }}>
+          {filterChips.map((chip) => (
+            <TouchableOpacity 
+              key={chip} 
+              style={[
+                styles.chip, 
+                activeChip === chip ? styles.chipActive : { backgroundColor: isDarkMode ? theme.card : '#fff', borderColor: isDarkMode ? theme.border : '#e0ddd5' }
+              ]} 
+              onPress={() => setActiveChip(chip)}
+            >
+              <Text style={[styles.chipText, activeChip === chip ? styles.chipTextActive : { color: theme.text }]}>{chip}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       {showFilters && (
@@ -205,44 +229,77 @@ const Search = ({ navigation, route }) => {
         </View>
       )}
 
-      <Text style={[styles.pageTitle, { color: theme.text }]}>
-        {filteredItems.length} Results Found
-      </Text>
+      <View style={styles.resultsRow}>
+        <Text style={[styles.resCount, { color: theme.subText }]}>{filteredItems.length} results</Text>
+        <TouchableOpacity style={styles.sortBtn}>
+          <Text style={[styles.sortBtnText, { color: theme.text }]}>Relevance</Text>
+          <AntDesign name="caretdown" size={10} color={theme.subText} style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
+      </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.gridContainer}>
           {filteredItems.length > 0 ? (
-            filteredItems.map((item) => (
+            filteredItems.map((item) => {
+              // LOGIC CHANGE: Apply Smart Math and calculate Fake Discount UI properties
+              const finalPrice = getMarkupPrice(item.price, item.markup_percentage);
+              let slashedDisplay = null;
+              let discountBadge = null;
+              
+              if (item.slashed_price && parseFloat(item.slashed_price) > finalPrice) {
+                slashedDisplay = parseFloat(item.slashed_price);
+                const percentageOff = Math.round(((slashedDisplay - finalPrice) / slashedDisplay) * 100);
+                discountBadge = `${percentageOff}% OFF`;
+              }
+
+              return (
                 <TouchableOpacity 
                   key={item.id} 
-                  style={[styles.gridCard, { backgroundColor: theme.card }]} 
+                  style={[styles.gridCard, { backgroundColor: isDarkMode ? theme.card : '#fff', borderColor: isDarkMode ? theme.border : '#ede9e0', borderWidth: 0.5 }]} 
                   onPress={() => navigation.navigate('Details', { restaurant: item.restaurants, autoSelectItem: item })}
                 >
                   <View style={styles.cardImageContainer}>
                     <Image source={{ uri: item.image_url }} style={styles.cardImage} />
-                    <View style={styles.badgeOverlay}>
-                      <View style={[styles.miniVegBorder, { borderColor: item.is_veg ? '#0f8a46' : '#e23744' }]}>
-                         <View style={[styles.miniVegDot, { backgroundColor: item.is_veg ? '#0f8a46' : '#e23744', borderRadius: item.is_veg ? 2 : 50 }]} />
+                    
+                    {/* UI CHANGE: Add Discount Badge over the image like Swiggy */}
+                    {discountBadge && (
+                      <View style={styles.discountBadge}>
+                        <Text style={styles.discountBadgeText}>{discountBadge}</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.frostedBadge}>
+                      <Text style={styles.frostedBadgeText}>{item.course || 'Food'}</Text>
+                    </View>
+
+                    <View style={styles.vegIndicatorTopRight}>
+                      <View style={[styles.newVegBorder, { borderColor: item.is_veg ? '#3a8a00' : '#e23744' }]}>
+                         <View style={[styles.newVegDot, { backgroundColor: item.is_veg ? '#3a8a00' : '#e23744', borderRadius: 50 }]} />
                       </View>
                     </View>
-                    <View style={styles.courseBadge}>
-                      <Text style={styles.courseText}>{item.course || 'Food'}</Text>
-                    </View>
                   </View>
+                  
                   <View style={styles.cardContent}>
                     <Text style={[styles.itemName, { color: theme.text }]} numberOfLines={1}>{item.name}</Text>
                     <Text style={[styles.restaurantNameLabel, { color: theme.subText }]} numberOfLines={1}>
                       {item.restaurants ? item.restaurants.name : 'Local'}
                     </Text>
                     <View style={styles.bottomRow}>
-                      <Text style={[styles.priceText, { color: theme.text }]}>₹{getMarkupPrice(item.price)}</Text>
-                      <View style={[styles.addButton, { backgroundColor: theme.accent }]}>
-                        <AntDesign name="plus" size={14} color="#FFF" />
+                      {/* UI CHANGE: Inject the slashed price row styling */}
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.priceText, { color: theme.text }]}>₹{finalPrice}</Text>
+                        {slashedDisplay && (
+                          <Text style={[styles.slashedPriceText, { color: theme.subText, fontSize: 11, marginLeft: 4 }]}>₹{slashedDisplay}</Text>
+                        )}
+                      </View>
+                      
+                      <View style={styles.newAddButton}>
+                        <Text style={styles.newAddButtonText}>+</Text>
                       </View>
                     </View>
                   </View>
                 </TouchableOpacity>
-            ))
+            )})
           ) : (
             <View style={styles.emptyState}>
                <MaterialCommunityIcons name="food-off" size={60} color={theme.border} />
@@ -260,12 +317,21 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 30 },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginTop: 10, marginBottom: 15 },
   backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'flex-start' },
-  headerTitle: { fontFamily: 'montserrat_bold', fontSize: 20 },
-  searchWrapper: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 15 },
-  searchContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', borderRadius: 25, borderWidth: 1, paddingHorizontal: 15, height: 50 },
+  headerTitle: { fontFamily: 'montserrat_bold', fontSize: 18, letterSpacing: -0.3 },
+  searchWrapper: { paddingHorizontal: 20, marginBottom: 10 },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, borderWidth: 0.5, paddingLeft: 14, paddingRight: 6, height: 46 },
   searchIcon: { marginRight: 10 },
-  searchInput: { flex: 1, fontFamily: 'montserrat_regular', fontSize: 14 },
-  filterIconBtn: { width: 50, height: 50, borderRadius: 15, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  searchInput: { flex: 1, fontFamily: 'montserrat_regular', fontSize: 13, height: '100%' },
+  inlineFilterBtn: { backgroundColor: '#1a1a1a', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  chipsScroll: { paddingHorizontal: 20, marginBottom: 15 },
+  chip: { borderWidth: 0.5, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, marginRight: 8 },
+  chipActive: { backgroundColor: '#1a1a1a', borderColor: '#1a1a1a' },
+  chipText: { fontSize: 11, fontFamily: 'montserrat_medium' },
+  chipTextActive: { color: '#d4f570' },
+  resultsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 },
+  resCount: { fontSize: 12, fontFamily: 'montserrat_regular' },
+  sortBtn: { flexDirection: 'row', alignItems: 'center' },
+  sortBtnText: { fontSize: 12, fontFamily: 'montserrat_medium' },
   filterMenuContainer: { paddingBottom: 15 },
   vegToggleContainer: { flexDirection: 'row', paddingHorizontal: 20, gap: 10 },
   vegChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1 },
@@ -274,25 +340,30 @@ const styles = StyleSheet.create({
   filterScroll: { paddingLeft: 20 },
   filterChip: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, marginRight: 10, borderWidth: 1 },
   filterText: { fontFamily: 'montserrat_medium', fontSize: 13 },
-  pageTitle: { fontFamily: 'montserrat_bold', fontSize: 16, marginHorizontal: 20, marginBottom: 15, marginTop: 15 },
   gridContainer: { paddingHorizontal: 20, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  gridCard: { width: (width - 55) / 2, borderRadius: 24, marginBottom: 20, elevation: 4, overflow: 'hidden' },
-  cardImageContainer: { width: '100%', height: 130, position: 'relative' },
+  gridCard: { width: (width - 55) / 2, borderRadius: 16, marginBottom: 15, overflow: 'hidden' },
+  cardImageContainer: { width: '100%', height: 120, position: 'relative' },
   cardImage: { width: '100%', height: '100%', resizeMode: 'cover' },
-  badgeOverlay: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(255,255,255,0.9)', padding: 4, borderRadius: 4 },
-  miniVegBorder: { width: 12, height: 12, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
-  miniVegDot: { width: 5, height: 5 },
-  courseBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  courseText: { color: '#FFF', fontSize: 10, fontFamily: 'montserrat_bold' },
-  cardContent: { padding: 12 },
-  itemName: { fontFamily: 'montserrat_bold', fontSize: 14, marginBottom: 2 },
-  restaurantNameLabel: { fontSize: 11, fontFamily: 'montserrat_medium', marginBottom: 12 },
+  frostedBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(255,255,255,0.92)', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20 },
+  frostedBadgeText: { color: '#333', fontSize: 9, fontFamily: 'montserrat_bold', letterSpacing: 0.2 },
+  vegIndicatorTopRight: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(255,255,255,0.8)', padding: 3, borderRadius: 4 },
+  newVegBorder: { width: 10, height: 10, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center', borderRadius: 2 },
+  newVegDot: { width: 5, height: 5 },
+  cardContent: { padding: 10 },
+  itemName: { fontFamily: 'montserrat_bold', fontSize: 13, marginBottom: 2 },
+  restaurantNameLabel: { fontSize: 11, fontFamily: 'montserrat_medium', marginBottom: 10 },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  priceText: { fontFamily: 'montserrat_bold', fontSize: 16 },
-  addButton: { width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
+  priceText: { fontFamily: 'montserrat_bold', fontSize: 14 },
+  // UI CHANGE: Added Slashed Price CSS
+  slashedPriceText: { fontFamily: 'montserrat_regular', fontSize: 13, textDecorationLine: 'line-through' },
+  // UI CHANGE: Added Discount Badge CSS
+  discountBadge: { position: 'absolute', bottom: 0, left: 0, backgroundColor: '#e23744', paddingHorizontal: 6, paddingVertical: 4, borderTopRightRadius: 8 },
+  discountBadgeText: { color: '#FFF', fontFamily: 'montserrat_bold', fontSize: 10 },
+  newAddButton: { width: 26, height: 26, backgroundColor: '#a3d45f', borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  newAddButtonText: { fontSize: 18, color: '#1a2e00', lineHeight: 20, marginTop: -2 },
   emptyState: { width: '100%', alignItems: 'center', marginTop: 40 },
   noResultsText: { marginTop: 10, fontFamily: 'montserrat_medium' },
-  skeletonBlock: { borderRadius: 8 }
+  skeletonBlock: { borderRadius: 16 }
 });
 
 export default Search;

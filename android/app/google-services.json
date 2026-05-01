@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "895176791182",
+    "project_id": "localbites-4a8b7",
+    "storage_bucket": "localbites-4a8b7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:895176791182:android:f83cae4c399e3eae9565df",
+        "android_client_info": {
+          "package_name": "com.localbitesnew"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA7GI4-ejAFxfJWSJZdNSF_wbBpZQ4NeJg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
